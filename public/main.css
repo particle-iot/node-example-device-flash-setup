@@ -1,0 +1,48 @@
+@CHARSET "UTF-8";
+
+body
+{
+    background-color:#ffffff;
+    width: 1000px;
+}
+
+p,h1,h2,h3,li,td,div
+{ 
+    font-family: helvetica, sans-serif;
+    color:#000000;
+    font-size: medium; 
+}
+
+.deviceFlex
+{
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+.deviceInfoBox
+{
+    width: 200px;
+    height: 400px;
+    overflow: auto;
+}
+
+.deviceLogs
+{
+    font-size: small; 
+}
+
+.deviceSetupFailed {
+    background-color: #ca2f37;
+}
+
+.deviceSetupDone {
+    background-color: #8FBC8F;
+}
+
+.logsPane
+{
+    max-height: 400px;
+    font-size: small; 
+}

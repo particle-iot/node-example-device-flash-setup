@@ -1,0 +1,26 @@
+{
+    "name": "node-example-device-flash-setup",
+    "version": "0.0.1",
+    "description": "Example script for programming devices by USB and setting up cloud settings",
+    "private": true,
+    "scripts": {
+        "start": "node app.js"
+    },
+    "author": "rick@particle.io",
+    "contributors": [],
+    "license": "MIT",
+    "dependencies": {
+        "@particle/node-example-helper": "0.0.1",
+        "adm-zip": "^0.5.6",
+        "axios": "^0.21.4",
+        "binary-version-reader": "git+https://github.com/particle-iot/binary-version-reader.git",
+        "express": "^4.17.1",
+        "express-sse": "^0.5.3",
+        "particle-api-js": "^9.1.0",
+        "particle-usb": "^1.2.2",
+        "winston": "^3.3.3"
+    },
+    "engines": {
+        "node": ">=12.14.0"
+    }
+}

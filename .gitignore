@@ -1,0 +1,7 @@
+node_modules
+test-code
+test-firmware
+staging
+deviceLogs
+.DS_Store
+settings.json

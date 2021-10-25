@@ -1,24 +1,31 @@
+// Standard node libraries
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-
 const { spawn } = require('child_process');
 
+// Used to make HTTP REST API calls
 const axios = require('axios');
 
+// Used to extract the zip files that are used for device restore images
 var AdmZip = require("adm-zip");
 
+// Particle API. Used for most API calls, though there a few that use
+// axios directly.
 var Particle = require('particle-api-js');
 var particle = new Particle();
 
+// Used to change the device mode into DFU mode, and a few other things
+// for devices connected by USB
 var usb = require('particle-usb');
 
+// Used to decode the module headers in firmware binaries
 const BinaryVersionReader = require('binary-version-reader').HalModuleParser;
 const binaryVersionReader = new BinaryVersionReader();
 
+// Used for logging
 const winston = require('winston');
-
 const Transport = require('winston-transport');
 
 // SSE (Server Sent Events) is used to communicate between the node script
@@ -52,17 +59,21 @@ const logger = winston.createLogger({
     ]
 });
 
+// Our own configuration file
 let config = require('./config');
 
+// Utilities for interactive command line interface. Used mainly to prompt
+// for username, password, and MFA token if needed/
 const helper = require('@particle/node-example-helper');
 helper
     .withRootDir(__dirname)
     .withConfig(config);
  
+// This is just used to detect if the configuration file has changed, 
+// so binaries can be updated if needed.
 const hash = crypto.createHash('sha256');
 hash.update(JSON.stringify(config));
 const configHash = hash.digest('hex');
-
 
 // The stagingDir is where we store temporary files
 let stagingDir = config.stagingDir || './staging';
@@ -73,6 +84,8 @@ if (!fs.existsSync(stagingDir)) {
     fs.mkdirSync(stagingDir);
 }
 
+// The deviceLogs directory contains one directory for each device ID that is
+// processed, to keep logs and output from the DFU commands, just in case.
 let deviceLogsDir = config.deviceLogsDir || './deviceLogs';
 if (deviceLogsDir.startsWith('./')) {
     deviceLogsDir = path.join(__dirname, deviceLogsDir.substr(2));
@@ -81,8 +94,14 @@ if (!fs.existsSync(deviceLogsDir)) {
     fs.mkdirSync(deviceLogsDir);
 }
 
+// The savedData is used to keep information about the user firmware and
+// Device OS versions. This lives in the staging directory and the file
+// is updated by the code during initialization. There is no sensitive
+// data like access tokens in this file, but there is information about
+// your product (what firmware versions are available, etc.).
+// The staging directory is in .gitignore and is not normally saved to
+// source control since it can be regenerated from config.json.
 let savedData;
-
 let savedDataPath = path.join(stagingDir, 'savedData.json');
 if (fs.existsSync(savedDataPath)) {
     try {
@@ -109,6 +128,8 @@ function saveSavedData() {
     fs.writeFileSync(savedDataPath, JSON.stringify(savedData, null, 2));
 }
 
+// Handles the Particle SSE event stream, which is used to detect when devices come online
+// after setup.
 let eventStream;
 let deviceNames = {};
 let eventMonitors = [];
@@ -153,6 +174,29 @@ const connectEventStream = function () {
                         }
                     }
                 }
+
+                const deviceDir = deviceLogDir(data.coreid, false);
+                if (deviceDir) {
+                    if (data.name === 'spark/device/diagnostics/update') {
+                        // Store the l  atest device diagnostics in formatted JSON for easier readability
+                        const f = path.join(deviceDir, 'diag.json');
+                        fs.writeFileSync(f, JSON.stringify(obj.eventData, null, 2), {flag:'w+'});                
+                    }
+
+                    // Log all events by Device ID for devices that we are in the process of configuring
+                    {
+                        const f = path.join(deviceDir, 'events.txt');
+                        const ts = new Date().toISOString();         
+                        let msg = '';
+                        msg += 'name: ' + data.name + '\n';
+                        msg += 'data: ' + data.data + '\n';
+                        msg += 'time: ' + data.published_at + '\n';
+                        msg += '\n';
+
+                        fs.writeFileSync(f, msg, {flag:'a+'});            
+                    }
+
+                }                
             }
             catch(e) {
                 console.log('exception in Particle event stream handler', e);
@@ -164,6 +208,8 @@ const connectEventStream = function () {
     });
 }
 
+// Returns a promise to wait for a Particle SSE event to arrive in the future.
+// This is allows waiting for a device to come online after setup.
 function waitForEvent(options) {
     return new Promise(function(resolve, reject) {
         if (options.timeout) {
@@ -176,6 +222,7 @@ function waitForEvent(options) {
     });
 }
 
+// This creates the Express.js server used to handle the web-based status interface
 var SSE = require('express-sse');
 var sse = new SSE();
 
@@ -204,6 +251,10 @@ var server = http.createServer(serverOptions, app).listen(config.serverPort, 'lo
 });
 
 
+// These are the various parts that could be flashed by DFU
+// Based on the device you have selected, some items are removed from this array, 
+// for example gen 3 does not have system-part2 or system-part3, and gen 2 does not
+// have setup-done.
 let dfuParts = [
     { name: 'system-part1' },
     { name: 'system-part2' },
@@ -217,6 +268,10 @@ let dfuParts = [
         startAddr: 0x1fc6
     },
     { 
+        // This tells the device to move the bootloader, which is in the OTA
+        // sector, into the actual bootloader space. The device will briefly
+        // go into blinking magenta, then quickly reboot again using the new
+        // bootloader.
         name: 'a5', 
         alt: 1,
         startAddr: 1753,
@@ -226,10 +281,14 @@ let dfuParts = [
 
 let usbDeviceInfo = {}; 
 
-
+// This is run do do initialization, then wait for USB devices
 async function run() {
     // Load required data
     try {
+        // Prompt for authentication if needed.
+        // 1. Tries config.auth if present.
+        // 2. Tries settings.json if present and not expired.
+        // 3. Prompts the user from the node console for the username, password, and MFA.
         await helper.authenticate();
 
         if (config.productId) {
@@ -248,8 +307,12 @@ async function run() {
             process.exit(1);
         }
 
+        // Connect to the Particle SSE stream to get online notifications
         connectEventStream();
     
+        // This is the information about all device restore images that are available.
+        // We use these images to get Device OS and other parts (like bootloader and 
+        // softdevice).
         if (!savedData.deviceRestoreInfo) {
             await new Promise((resolve, reject) => {
                 axios.get('https://docs.particle.io/assets/files/deviceRestore.json')
@@ -266,6 +329,7 @@ async function run() {
             });
         }
         
+        // Get information about mapping numeric versions to semver.
         if (!savedData.versionInfo) {
             await new Promise((resolve, reject) => {
                 axios.get('https://docs.particle.io/assets/files/versionInfo.json')
@@ -282,7 +346,7 @@ async function run() {
             });
         }
         
-        
+        // Get information about your product
         await new Promise((resolve, reject) => {
             particle.getProduct({ auth: helper.auth, product: config.productId }).then(
                 function (data) {
@@ -296,7 +360,7 @@ async function run() {
             );
         });
     
-        // Get all product firmware versions
+        // Get all product firmware versions for your product
         await new Promise((resolve, reject) => {
             particle.listProductFirmware({ auth: helper.auth, product: config.productId }).then(
                 function (data) {
@@ -321,7 +385,10 @@ async function run() {
         });
     
         let userBinaryFileInfo;
-    
+
+        
+        // Get the firmware binary for your product, either manually configured version or the product default
+        // If the config hash changes the contents of the staging directory are deleted, so firmware.bin won't exist
         const firmwareBinaryPath = path.join(stagingDir, 'firmware.bin');
         if (!fs.existsSync(firmwareBinaryPath) || !savedData.moduleInfo || !savedData.moduleInfo['firmware']) {
             let firmwareVersion = config.firmwareVersion;
@@ -340,6 +407,7 @@ async function run() {
             
                         fs.writeFileSync(firmwareBinaryPath, data);
     
+                        // Read the module header so we can find the Device OS dependency information
                         binaryVersionReader.parseFile(firmwareBinaryPath, function (fileInfo, err) {
                             // console.log('fileInfo', fileInfo);
                             if (err) {
@@ -378,6 +446,15 @@ async function run() {
                                 }
                             }
 
+                            if (savedData.systemVersion >= 3000 && savedData.platformInfo.id == 26) {
+                                // Is tracker
+                                savedData.upgradeTrackerNCP = true;
+                            }
+                            else {
+                                savedData.upgradeTrackerNCP = false;
+                            }
+
+
                             // console.log('restoreSemVer=' + savedData.restoreSemVer + ' platformName=' + savedData.platformName)
     
                             saveSavedData();
@@ -414,7 +491,8 @@ async function run() {
         }
     
     
-    
+        // Download the restore image and extract the zip file
+        // If the config hash changes the contents of the staging directory are deleted, so restore.zip won't exist
         const restoreZipPath = path.join(stagingDir, 'restore.zip');
         if (!fs.existsSync(restoreZipPath)) {
             await new Promise((resolve, reject) => {
@@ -434,6 +512,7 @@ async function run() {
                 })
                 .catch(error => {
                     logger.error('error downloading restore zip', error);
+                    reject();
                 });
             });
         }
@@ -638,16 +717,21 @@ const fetchPage = function (page) {
     );
 };
 
-function deviceLogDir(deviceId) {
+function deviceLogDir(deviceId, create) {
     const f = path.join(deviceLogsDir, deviceId);
     if (!fs.existsSync(f)) {
-        fs.mkdirSync(f);
+        if (create) {
+            fs.mkdirSync(f);
+        }
+        else {
+            return null;
+        }
     }
     return f;
 }
 
 function deviceLogJson(deviceId, obj) {
-    const f = path.join(deviceLogDir(deviceId), 'device.json');
+    const f = path.join(deviceLogDir(deviceId, true), 'device.json');
 
     let oldObj = {};
     if (fs.existsSync(f)) {
@@ -674,7 +758,7 @@ function deviceLogBrowser(id, msg) {
     console.log(id + ': ' + msg);
 
     // Also log to to the device-specific log file
-    const f = path.join(deviceLogDir(id), 'log.txt');
+    const f = path.join(deviceLogDir(id, true), 'log.txt');
     const ts = new Date().toISOString();
     fs.writeFileSync(f, ts + ': ' + msg + '\n', {flag:'a+'});
 };
@@ -761,7 +845,6 @@ async function execCommand(cmd, args, { timeout = 0 } = {}) {
 
 async function flashFirmware(device) {
     
-    // TODO: Implement ESP32 NCP on Tracker with 3.0.0 and later
 
     const deviceId = device.id;
 
@@ -821,7 +904,7 @@ async function flashFirmware(device) {
         const res = await execCommand('dfu-util', args, { timeout: config.flashTimeout });
 
         {
-            const f = path.join(deviceLogDir(deviceId), 'dfu-' + partName + '.txt');
+            const f = path.join(deviceLogDir(deviceId, true), 'dfu-' + partName + '.txt');
             const ts = new Date().toISOString();         
             fs.writeFileSync(f, ts + ':\n' + res.output + '\n\n', {flag:'a+'});    
         }
@@ -852,6 +935,12 @@ async function flashFirmware(device) {
         
     }
 
+    // 
+    if (savedData.upgradeTrackerNCP) {
+        // TODO: Implement ESP32 NCP upgrade on Tracker with 3.0.0 and later
+        // (possibly also optimize so this isn't done when not necessary)
+    }
+    
 
     deviceLogJson(deviceId, {
         flashSuccess: true
@@ -862,6 +951,7 @@ async function flashFirmware(device) {
     usbDeviceInfo[deviceId].disconnectWait = 8 * 1000; // 8 seconds
 }
 
+// Called when a device has been found on the USB bus
 async function deviceCheck(device) {
     const deviceId = device.id;
 
@@ -881,7 +971,7 @@ async function deviceCheck(device) {
         res = await particle.addDeviceToProduct({ auth: helper.auth, product: config.productId, deviceId: deviceId });
         if (res.statusCode != 200) {
             deviceLogBrowser(deviceId, 'failed to add to product');
-            return;
+            throw 'failed to add to product';
         }
 
         deviceLogBrowser(deviceId, 'added to product');
@@ -890,7 +980,7 @@ async function deviceCheck(device) {
         res = await particle.getDevice({ auth: helper.auth, product: config.productId, deviceId: deviceId });
         if (res.statusCode != 200) {
             deviceLogBrowser(deviceId, 'failed get device info');
-            return;
+            throw 'failed to get device info';
         }
     
         let deviceInfo = res.body;
@@ -997,10 +1087,10 @@ async function deviceCheck(device) {
                     device.enterListeningMode();
                 }
                 catch(e) {
-                    device = await usb.openDeviceById(deviceId);
                 }
 
-                await new Promise(resolve => setTimeout(() => resolve(), 2000));                
+                await new Promise(resolve => setTimeout(() => resolve(), 2000));
+                device = await usb.openDeviceById(deviceId);
             }
 
             // 

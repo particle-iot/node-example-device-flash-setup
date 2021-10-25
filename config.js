@@ -3,7 +3,7 @@ const { configure } = require("winston");
 (function(config) {
     // You must set this to be the productId of the product you want
     // to onboard devices for.
-    config.productId = 15513;
+    config.productId = 0;
 
     // Set to true to flash user firmware and Device OS to the device
     // by USB. If false or not set, then only the cloud-based setup
@@ -79,8 +79,10 @@ const { configure } = require("winston");
     // config.auth = 'xxxx';
 
     // If you prompt for the authentication code, this is how long the token
-    // should be valid in seconds. 3600 = 1 hour
-    config.authTokenLifeSecs = 3600;
+    // should be valid in seconds. 3600 = 1 hour, 36000 = 10 hours. Make sure
+    // the token will not run out while you are running the script, as it
+    // is used for cloud setup.
+    config.authTokenLifeSecs = 36000;
 
     // If you are using interactive login, you can temporarily save the token
     // in the settings.json file so you don't have to log in every time you

@@ -35,7 +35,7 @@
 
 Unlike most of the node-example scripts, this script can only be run locally in node, not from a browser using Stackblitz. The reason is that your web browser doesn't provide automatic access to all USB devices for security reasons, so there's no way to auto-detect new devices and program them from a browser.
 
-- You must have dfu-util installed. The easiest way is to install the [Particle CLI](https://docs.particle.io/cli/).
+- You must have dfu-util installed. The easiest way is to install the [Particle CLI](https://docs.particle.io/cli/), but the CLI itself isn't used.
 
 - If you don't have [node.js](https://nodejs.org/) version 12 or later installed, do that first. At the time of writing, the current LTS version is 14.17.6 but whatever is the latest LTS (long-term support) version is recommended.
 
@@ -61,7 +61,7 @@ node app.js
 
 - Connect device(s) to the computer by USB.
 
-- The status will update both in the node console log (where you ran `node app.js`) and also in the browser. 
+- The status will update both in the node console log (where you ran `node app.js`) and also in the browser. It may take up to 5 seconds for a new devices to be detected.
 
 - You can connect multiple devices to the same computer by USB and it will update them all at the same time. 
 

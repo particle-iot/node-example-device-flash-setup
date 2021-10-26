@@ -238,6 +238,19 @@ app.use(express.json());
 // SSE event stream
 app.get('/stream', sse.init);
 
+app.post('/signal', function(req, res) {
+    if (req.body.deviceId) {
+        particle.signalDevice({ auth: helper.auth, product: config.productId, deviceId: req.body.deviceId, signal: true }).then(
+            function (data) {
+                deviceLogBrowser(req.body.deviceId, "signaling device");
+            },
+            function (err) {
+                deviceLogBrowser(req.body.deviceId, "error signaling device");
+            }
+        );
+    }
+    res.end('{}');  
+});
 
 app.use('/', express.static(publicPath));
 

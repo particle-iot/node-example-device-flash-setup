@@ -72,6 +72,7 @@ function connectSSE() {
 
             case 'setupDone':
                 $(deviceFind(obj2.id, false).elem).addClass('deviceSetupDone');
+                $(deviceFind(obj2.id, false).elem).find('.signalDiv').show();
                 break;
 
             default:
@@ -108,8 +109,35 @@ function deviceFind(id, create) {
             id,
             elem: $('.deviceInfo')[0].cloneNode(true)
         };
+
         $(d.elem).removeClass('deviceInfo');
         $(d.elem).show();
+
+        $(d.elem).find('.signalButton').on('click', function() {
+            const postObj = {
+                deviceId: id
+            };
+
+            let request = {
+                contentType: 'application/json',
+                data: JSON.stringify(postObj),
+                dataType: 'json',
+                error: function (jqXHR) {
+                },
+                headers: {
+                    'Accept': 'application/json'
+                },
+                method: 'POST',
+                success: function (resp, textStatus, jqXHR) {
+                },
+                url: 'signal'
+            }
+
+  
+
+            $.ajax(request);
+
+        });
 
         $(d.elem).find('.deviceInfoLabel').text(id);
 

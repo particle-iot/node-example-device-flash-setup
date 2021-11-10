@@ -1201,12 +1201,8 @@ async function deviceCheck(device) {
             catch(e) {
                 console.log('shipping mode exception', e);
                 deviceLogBrowser(deviceId, 'shipping mode failed');
+            }            
         }
-
-            
-        }
-
-        //  {"cmd":"enter_shipping"}
 
 
         deviceLogBrowser(deviceId, 'setup done!');

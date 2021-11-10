@@ -104,6 +104,12 @@ this is only the access token when using interactive login with saving access to
 - License: Apache 2.0
 
 
+### 0.0.2 (2021-11-10)
+
+- When flashing the Tracker, I had the wrong address for the OTA sectors. The result of this is that the bootloader did not update, and it would likely corrupt the flash file system. If you got stuck in fast blinking cyan, it's probably because the device needs a particle keys server and particle keys doctor due to losing its keys in the DCT.
+- The script will now flash the ESP32 NCP on the Tracker when you flash Device OS 3.0.0 or later. After Device OS is flashed and the device reboots, it will go back into DFU mode and flash the NCP (by flashing it to the OTA sectors and using the A5 flag). To not flash the NCP, set `config.flashTrackerNCP = false`.
+- New option `config.trackerShippingMode` which puts the device into shipping mode after setup. This is done over USB so the device does not have to come online. Default is false.
+
 ### 0.0.1 (2021-10-25)
 
 - Initial version

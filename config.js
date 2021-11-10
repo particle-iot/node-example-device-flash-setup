@@ -10,6 +10,10 @@ const { configure } = require("winston");
     // steps are done.
     config.flashFirmware = true;
 
+    // Force a specific version of Device OS instead of deriving it
+    // from the user firmware binary
+    // config.forceSystemVersion = '3.1.0';
+
     // Version of the firmware to flash by USB. Leave unset to flash
     // the default product firmware. Normally you should use the product
     // default unless you are using lockFirmwareVersion, otherwise when
@@ -26,6 +30,14 @@ const { configure } = require("winston");
     // be offline when this command is issued, and also presumably because
     // you just flashed the firmware by USB.
     // config.flashNow = false;
+
+    // If the device is a tracker and the version being installed is 
+    // 3.0.0 or later, flash the NCP. This is required for factory
+    // devices with 1.5.x or 2.x on them, so the default is true.
+    // This adds some time to the upgrade and an additional reboot
+    // so there is an option to turn it off if you know the device
+    // contains 3.0.0 or later already.
+    config.flashTrackerNCP = true;
 
     // Set this to true to claim the device to the user who is logged in.
     // This user must be a team member of the product. Set to false or 

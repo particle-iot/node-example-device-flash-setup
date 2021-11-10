@@ -268,7 +268,7 @@ var server = http.createServer(serverOptions, app).listen(config.serverPort, 'lo
 // Based on the device you have selected, some items are removed from this array, 
 // for example gen 3 does not have system-part2 or system-part3, and gen 2 does not
 // have setup-done.
-let dfuParts = [
+let dfuPartsNormal = [
     { name: 'system-part1' },
     { name: 'system-part2' },
     { name: 'system-part3' },
@@ -290,6 +290,17 @@ let dfuParts = [
         startAddr: 1753,
         leave: true
     }
+];
+
+const dfuPartsNcp = [
+    { name: 'ncp' },
+    { 
+        name: 'a5', 
+        alt: 1,
+        startAddr: 1753,
+        leave: true
+    }
+
 ];
 
 let usbDeviceInfo = {}; 
@@ -473,10 +484,10 @@ async function run() {
 
                             if (savedData.systemVersion >= 3000 && savedData.platformInfo.id == 26) {
                                 // Is tracker
-                                savedData.upgradeTrackerNCP = true;
+                                savedData.shouldUpgradeTrackerNCP = true;
                             }
                             else {
-                                savedData.upgradeTrackerNCP = false;
+                                savedData.shouldUpgradeTrackerNCP = false;
                             }
 
 
@@ -556,72 +567,80 @@ async function run() {
                 fs.writeFileSync(p, buf);
             }
 
-            // Handle modules where prefix must be dropped (such as soft device)
-            for(let ii = dfuParts.length - 1; ii >= 0; ii--) {
-                partName = dfuParts[ii].name;
-                if (savedData.moduleInfo[partName]) {
-                    const prefixInfo = savedData.moduleInfo[partName].prefixInfo;
+            const updateDfuParts = function(dfuParts) {
+                // Handle modules where prefix must be dropped (such as soft device)
+                for(let ii = dfuParts.length - 1; ii >= 0; ii--) {
+                    partName = dfuParts[ii].name;
+                    if (savedData.moduleInfo[partName]) {
+                        const prefixInfo = savedData.moduleInfo[partName].prefixInfo;
+                    
+                        let binaryPath = path.join(stagingDir, dfuParts[ii].name + '.bin');
+                        if ((prefixInfo.moduleFlags & 0x01) != 0) { // ModuleInfo.Flags.DROP_MODULE_INFO
+                            // Drop module info is used for the Gen 3 softdevice
                 
-                    let binaryPath = path.join(stagingDir, dfuParts[ii].name + '.bin');
-                    if ((prefixInfo.moduleFlags & 0x01) != 0) { // ModuleInfo.Flags.DROP_MODULE_INFO
-                        // Drop module info is used for the Gen 3 softdevice
-            
-                        const tempPath = path.join(stagingDir, dfuParts[ii].name + '.noprefix.bin');
-            
-                        const binary = fs.readFileSync(binaryPath);
-            
-                        fs.writeFileSync(tempPath, binary.slice(24));
+                            const tempPath = path.join(stagingDir, dfuParts[ii].name + '.noprefix.bin');
                 
-                        dfuParts[ii].binaryPath = tempPath;
-                    }
-                    else {
-                        dfuParts[ii].binaryPath = binaryPath;
-                    }
-        
-                    dfuParts[ii].alt = 0;
-                    dfuParts[ii].startAddr = parseInt(prefixInfo.moduleStartAddy, 16);
-
-                    if (partName == 'bootloader') {
-                        if (savedData.platformInfo.gen == 3) {
-                            dfuParts[ii].startAddr = 0x80289000; // OTA sectors
-
-                            if (savedData.platformInfo.id != 26) {
-                                dfuParts[ii].startAddr = 0x80289000;
-                            }
-                            else {
-                                // Tracker
-                                dfuParts[ii].startAddr = 0x80689000;
-                            }
+                            const binary = fs.readFileSync(binaryPath);
                 
-                            dfuParts[ii].alt = 2; // external flash
+                            fs.writeFileSync(tempPath, binary.slice(24));
+                    
+                            dfuParts[ii].binaryPath = tempPath;
                         }
                         else {
-                            dfuParts[ii].startAddr = 0x80C0000; // OTA sectors
+                            dfuParts[ii].binaryPath = binaryPath;
+                        }
+            
+                        dfuParts[ii].alt = 0;
+                        dfuParts[ii].startAddr = parseInt(prefixInfo.moduleStartAddy, 16);
+
+                        if (partName == 'bootloader' || partName == 'ncp') {
+                            if (savedData.platformInfo.gen == 3) {
+                                dfuParts[ii].startAddr = 0x80289000; // OTA sectors
+
+                                if (savedData.platformInfo.id != 26) {
+                                    dfuParts[ii].startAddr = 0x80289000;
+                                }
+                                else {
+                                    // Tracker
+                                    dfuParts[ii].startAddr = 0x80689000;
+                                }
+                    
+                                dfuParts[ii].alt = 2; // external flash
+                            }
+                            else {
+                                dfuParts[ii].startAddr = 0x80C0000; // OTA sectors
+                            }
+                        }
+                    } 
+                    else 
+                    if (partName == 'setup-done') {
+                        if (savedData.platformInfo.gen == 3) {
+                            dfuParts[ii].binaryPath = path.join(stagingDir, '01.bin');
+                        }
+                        else {
+                            dfuParts.splice(ii, 1);
                         }
                     }
-                } 
-                else 
-                if (partName == 'setup-done') {
-                    if (savedData.platformInfo.gen == 3) {
-                        dfuParts[ii].binaryPath = path.join(stagingDir, '01.bin');
+                    else
+                    if (partName == 'a5') {
+                        // Leave this even though there is no module info because we've
+                        // set startAddr and alt above
+                        dfuParts[ii].binaryPath = path.join(stagingDir, dfuParts[ii].name + '.bin');
                     }
                     else {
                         dfuParts.splice(ii, 1);
                     }
+            
                 }
-                else
-                if (partName == 'a5') {
-                    // Leave this even though there is no module info because we've
-                    // set startAddr and alt above
-                    dfuParts[ii].binaryPath = path.join(stagingDir, dfuParts[ii].name + '.bin');
-                }
-                else {
-                    dfuParts.splice(ii, 1);
-                }
-        
-            }
-        }
+            };
 
+            updateDfuParts(dfuPartsNormal);
+
+            if (savedData.shouldUpgradeTrackerNCP) {
+                updateDfuParts(dfuPartsNcp);
+            }
+
+        }
 
     
     }
@@ -877,7 +896,7 @@ async function execCommand(cmd, args, { timeout = 0 } = {}) {
 }
 
 
-async function flashFirmware(device) {
+async function flashFirmware(device, dfuParts) {
     
 
     const deviceId = device.id;
@@ -891,40 +910,6 @@ async function flashFirmware(device) {
     const toUInt32Hex = function(num) {
         return '0x' + num.toString(16).padStart(8, '0');
     }
-
-    /*
-    // Before going into DFU mode, check the NCP version on the Tracker
-    if (config.verifyNCP && !device.isInDfuMode && device.platformId == 26) {
-        let ncpVersion;
-        try {
-            // CTRL_REQUEST_NCP_FIRMWARE_VERSION
-            const res = await device.sendControlRequest(31);
-            if (!res.status && res.data) {
-                // message GetNcpFirmwareVersionReply {
-                //  string version = 1;
-                //  uint32 module_version = 2;
-                // }
-                // data <Buffer 0a 05 30 2e 30 2e 35 10 05>
-                console.log('data', res.data);
-                if (res.data.readUint8(0) == 0x0a) {
-                    // String
-                    let len = res.data.readUint8(1); // Length
-
-                    ncpVersion = res.data.subarray(2, 2 + len).toString();
-                }
-            }            
-            else {
-                console.log('unexpected response', res);
-            }
-        }
-        catch(e) {
-            console.log('exception checking NCP version', e);
-        }
-        if (ncpVersion) {
-            deviceLogBrowser(deviceId, 'ncp was ' + ncpVersion);
-        }
-    }
-    */
 
     // 
     while(!device.isInDfuMode) {
@@ -979,18 +964,22 @@ async function flashFirmware(device) {
     
         // console.log('res', res);
 
+        // If rebooting, wait before reconnecting as the device needs a little while to reboot
+        if (dfuPart.leave) {
+            await new Promise(resolve => setTimeout(() => resolve(), 8000));      
+        }
+
+
         for(let tries = 0; tries < 10; tries++) {
             try {
                 // Reopen device
                 device = await usb.openDeviceById(deviceId);
-
                 break;
             }
             catch(e) {
-
-                await new Promise(resolve => setTimeout(() => resolve(), 2000));                
             }
         
+            await new Promise(resolve => setTimeout(() => resolve(), 2000));                
         }
 
         usbDeviceInfo[deviceId].lastSeen = new Date();
@@ -1001,12 +990,6 @@ async function flashFirmware(device) {
             throw 'DFU flash failed';
         }
         
-    }
-
-    // 
-    if (savedData.upgradeTrackerNCP) {
-        // TODO: Implement ESP32 NCP upgrade on Tracker with 3.0.0 and later
-        // (possibly also optimize so this isn't done when not necessary)
     }
     
 
@@ -1139,9 +1122,27 @@ async function deviceCheck(device) {
 
         if (config.flashFirmware) {
             // Flash firmware
-            await flashFirmware(device);
+            await flashFirmware(device, dfuPartsNormal);
         }
     
+        if (config.flashTrackerNCP && savedData.shouldUpgradeTrackerNCP) {
+            for(let tries = 0; tries < 5; tries++) {
+                try {
+                    device = await usb.openDeviceById(deviceId);
+
+                    break;
+                }
+                catch(e) {
+                    console.log('exception reconnecting to device', e);
+                }
+
+                await new Promise(resolve => setTimeout(() => resolve(), 2000));                
+            }
+
+            deviceLogBrowser(deviceId, 'flashing NCP');
+
+            await flashFirmware(device, dfuPartsNcp);
+        }
 
         /*
         if (config.checkModuleInfo) {

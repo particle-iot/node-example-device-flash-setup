@@ -435,10 +435,22 @@ async function run() {
                             delete userBinaryFileInfo.fileBuffer;
     
                             // Is it in the semver table?
-                            savedData.systemVersion = fileInfo.prefixInfo.depModuleVersion;
+                            if (config.forceSystemVersion) {
+                                savedData.systemVersion = semVerToSystemVersion(config.forceSystemVersion);
+                                if (!savedData.systemVersion) {
+                                    logger.info('forceSystemVersion does not specify a known restore image version');
+                                    reject('invalid forceSystemVersion');    
+                                }
+                                console.log('using forceSystemVersion=' + config.forceSystemVersion);
+                            }
+                            else {
+                                savedData.systemVersion = fileInfo.prefixInfo.depModuleVersion;
+                            }
     
                             savedData.systemVersionSemVer = systemVersionToSemVer(savedData.systemVersion);
     
+
+
                             // Is it in the restore images?
     
                             savedData.restoreSemVer = findRestoreSemVer(fileInfo.prefixInfo.platformID, savedData.systemVersion);
@@ -572,6 +584,15 @@ async function run() {
                     if (partName == 'bootloader') {
                         if (savedData.platformInfo.gen == 3) {
                             dfuParts[ii].startAddr = 0x80289000; // OTA sectors
+
+                            if (savedData.platformInfo.id != 26) {
+                                dfuParts[ii].startAddr = 0x80289000;
+                            }
+                            else {
+                                // Tracker
+                                dfuParts[ii].startAddr = 0x80689000;
+                            }
+                
                             dfuParts[ii].alt = 2; // external flash
                         }
                         else {
@@ -870,6 +891,40 @@ async function flashFirmware(device) {
     const toUInt32Hex = function(num) {
         return '0x' + num.toString(16).padStart(8, '0');
     }
+
+    /*
+    // Before going into DFU mode, check the NCP version on the Tracker
+    if (config.verifyNCP && !device.isInDfuMode && device.platformId == 26) {
+        let ncpVersion;
+        try {
+            // CTRL_REQUEST_NCP_FIRMWARE_VERSION
+            const res = await device.sendControlRequest(31);
+            if (!res.status && res.data) {
+                // message GetNcpFirmwareVersionReply {
+                //  string version = 1;
+                //  uint32 module_version = 2;
+                // }
+                // data <Buffer 0a 05 30 2e 30 2e 35 10 05>
+                console.log('data', res.data);
+                if (res.data.readUint8(0) == 0x0a) {
+                    // String
+                    let len = res.data.readUint8(1); // Length
+
+                    ncpVersion = res.data.subarray(2, 2 + len).toString();
+                }
+            }            
+            else {
+                console.log('unexpected response', res);
+            }
+        }
+        catch(e) {
+            console.log('exception checking NCP version', e);
+        }
+        if (ncpVersion) {
+            deviceLogBrowser(deviceId, 'ncp was ' + ncpVersion);
+        }
+    }
+    */
 
     // 
     while(!device.isInDfuMode) {

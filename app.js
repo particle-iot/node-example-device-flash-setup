@@ -1186,7 +1186,28 @@ async function deviceCheck(device) {
 
             deviceLogJson(deviceId, {online: true});
         }
-        
+
+        if (config.trackerShippingMode) {
+            try {
+                device = await usb.openDeviceById(deviceId);
+
+                const reqObj = {
+                    cmd: 'enter_shipping'
+                };
+                await device.sendControlRequest(10, JSON.stringify(reqObj));
+
+                deviceLogBrowser(deviceId, 'entered shipping mode');
+            }
+            catch(e) {
+                console.log('shipping mode exception', e);
+                deviceLogBrowser(deviceId, 'shipping mode failed');
+        }
+
+            
+        }
+
+        //  {"cmd":"enter_shipping"}
+
 
         deviceLogBrowser(deviceId, 'setup done!');
 

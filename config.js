@@ -39,6 +39,11 @@ const { configure } = require("winston");
     // contains 3.0.0 or later already.
     config.flashTrackerNCP = true;
 
+    // If true, enter shipping mode after connecting to the cloud (if that
+    // is enabled), or after flashing firmware (if cloud connecting
+    // is not enabled). This is only done when configuring a Tracker.
+    // config.trackerShippingMode = true;
+
     // Set this to true to claim the device to the user who is logged in.
     // This user must be a team member of the product. Set to false or 
     // leave unset to not claim the device (leave as unclaimed product

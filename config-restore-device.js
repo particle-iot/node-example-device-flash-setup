@@ -1,7 +1,7 @@
+// Sample configuration script for flashing Device OS and Tinker to a device
 
 (function(config) {
-    // You must set this to be the productId of the product you want
-    // to onboard devices for.
+    // Set to 0 because we're not configuring a prodj
     config.productId = 0;
 
     // Set to true to flash user firmware and Device OS to the device
@@ -11,7 +11,24 @@
 
     // Force a specific version of Device OS instead of deriving it
     // from the user firmware binary
-    // config.forceSystemVersion = '3.1.0';
+    config.forceSystemVersion = '1.4.4';
+
+    // Flash tinker instead uf a custom user binary. Use forceSystemVersion
+    // to set the Device OS version when flashing tinker.
+    config.flashTinker = true;
+
+    // If using flashTinker and forceSystemVersion, also need to specify
+    // the platform
+    config.forcePlatformId = 13; // 13 = boron
+
+    // Don't log into Particle account. This means no event stream, so no
+    // wait online, and no cloud-related functions like claiming, add to
+    // product, etc.
+    config.noParticleLogin = true;
+
+    // To mark setup not done, set this flag. With Device OS < 4.0 this
+    // will cause the device to go into listening mode at boot
+    config.setupNotDone = true;
 
     // Version of the firmware to flash by USB. Leave unset to flash
     // the default product firmware. Normally you should use the product
@@ -47,7 +64,7 @@
     // This user must be a team member of the product. Set to false or 
     // leave unset to not claim the device (leave as unclaimed product
     // device).
-    config.claimDevice = true;
+    config.claimDevice = false;
 
     // Mark as development device. Not typically how product devices are
     // configured, but an option. Requires that the device be claimed.
@@ -55,7 +72,7 @@
 
     // Set the device name to be the serial number. Optional if you
     // don't want to set all of the device names, or leave them blank.
-    config.deviceNameIsSerialNumber = true;
+    config.deviceNameIsSerialNumber = false;
 
     // If you want to assign a specific device group name, enter that here:
     // Note: device group name cannot contain spaces! Leave this unset if
@@ -64,11 +81,12 @@
 
     // If you want to assign a device group with a programmatically, set deviceGroupFormat to
     // one of these options:
-    config.deviceGroupFormat = 'date'; // YYYYMMDD
+    // config.deviceGroupFormat = 'date'; // YYYYMMDD
     // config.deviceGroupFormat = 'dateQuantity'; // YYYYMMDD_nnn where nnn is the number of devices in the device list file
 
     // True to check if the device comes online successfully after flashing
-    config.waitDeviceOnline = true;
+    // Set this to false for cellular devices without activated SIMs, or out of area devices
+    config.waitDeviceOnline = false;
 
     // This is the port to listen on for the interactive web interface.
     // The listening port is only bound to localhost, so you can't access the

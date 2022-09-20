@@ -5,6 +5,9 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// Optional command line arguments
+const argv = require('yargs/yargs')(process.argv.slice(2)).argv;
+
 // Used to make HTTP REST API calls
 const axios = require('axios');
 
@@ -59,8 +62,19 @@ const logger = winston.createLogger({
     ]
 });
 
-// Our own configuration file
-let config = require('./config');
+let configFile = argv.c;
+if (!configFile) {
+    configFile = path.join(__dirname, 'config.js');
+}
+else {
+    if (configFile.indexOf('/') < 0) {
+        configFile = path.join(__dirname, configFile);
+    }
+    console.log('using custom configuration ' + configFile);
+}
+
+// Our own configuration file, config.js, or passed on the command line with the -c option
+let config = require(configFile);
 
 // Utilities for interactive command line interface. Used mainly to prompt
 // for username, password, and MFA token if needed/
@@ -133,6 +147,8 @@ function saveSavedData() {
 let eventStream;
 let deviceNames = {};
 let eventMonitors = [];
+let productInfo;
+let platformId;
 
 const connectEventStream = function () {
     if (eventStream) {
@@ -222,9 +238,16 @@ function waitForEvent(options) {
     });
 }
 
+let sseInitOptions = [];
+if (config.noParticleLogin) {
+    sseInitOptions.push('{"op":"noCloud"}');
+}
+
 // This creates the Express.js server used to handle the web-based status interface
 var SSE = require('express-sse');
-var sse = new SSE();
+var sse = new SSE(sseInitOptions);
+
+
 
 var publicPath = path.join(__dirname, 'public');
 
@@ -309,30 +332,35 @@ let usbDeviceInfo = {};
 async function run() {
     // Load required data
     try {
-        // Prompt for authentication if needed.
-        // 1. Tries config.auth if present.
-        // 2. Tries settings.json if present and not expired.
-        // 3. Prompts the user from the node console for the username, password, and MFA.
-        await helper.authenticate();
+        if (!config.noParticleLogin) {
+            // Prompt for authentication if needed.
+            // 1. Tries config.auth if present.
+            // 2. Tries settings.json if present and not expired.
+            // 3. Prompts the user from the node console for the username, password, and MFA.
+            await helper.authenticate();
 
-        if (config.productId) {
-            // Make sure user has access to it
-            try {
-                productInfo = await helper.getProductInfo(config.productId);
+            if (config.productId) {
+                // Make sure user has access to it
+                try {
+                    productInfo = await helper.getProductInfo(config.productId);
+
+                    platformId = productInfo.platform_id;
+                }
+                catch(e) {
+                    console.log('productId is configured in config.js but is invalid or you do not have access to it');
+                    helper.warnConfigKey('productId');
+                    process.exit(1);
+                }
             }
-            catch(e) {
-                console.log('productId is configured in config.js but is invalid or you do not have access to it');
+            else {
                 helper.warnConfigKey('productId');
                 process.exit(1);
             }
-        }
-        else {
-            helper.warnConfigKey('productId');
-            process.exit(1);
-        }
 
-        // Connect to the Particle SSE stream to get online notifications
-        connectEventStream();
+            // Connect to the Particle SSE stream to get online notifications
+            connectEventStream();
+
+        }
     
         // This is the information about all device restore images that are available.
         // We use these images to get Device OS and other parts (like bootloader and 
@@ -370,140 +398,196 @@ async function run() {
             });
         }
         
-        // Get information about your product
-        await new Promise((resolve, reject) => {
-            particle.getProduct({ auth: helper.auth, product: config.productId }).then(
-                function (data) {
-                    productInfo = data.body.product;            
-                    resolve();
-                },
-                function (err) {
-                    logger.error('failed to retrieve product info (typically bad access token or product id)', err);
-                    process.exit(1);
-                }
-            );
-        });
-    
-        // Get all product firmware versions for your product
-        await new Promise((resolve, reject) => {
-            particle.listProductFirmware({ auth: helper.auth, product: config.productId }).then(
-                function (data) {
-                    savedData.firmwareVersions = data.body;
-                    savedData.defaultFirmwareVersion = 0;
-    
-                    for(const fv of savedData.firmwareVersions) {
-                        if (fv.product_default) {
-                            savedData.defaultFirmwareVersion = fv.version;
-                        }
+        if (!config.noParticleLogin && config.productId) {
+            // Get information about your product
+            await new Promise((resolve, reject) => {
+                particle.getProduct({ auth: helper.auth, product: config.productId }).then(
+                    function (data) {
+                        productInfo = data.body.product;            
+                        resolve();
+                    },
+                    function (err) {
+                        logger.error('failed to retrieve product info (typically bad access token or product id)', err);
+                        process.exit(1);
                     }
+                );
+            });
+        
+            // Get all product firmware versions for your product
+            await new Promise((resolve, reject) => {
+                particle.listProductFirmware({ auth: helper.auth, product: config.productId }).then(
+                    function (data) {
+                        savedData.firmwareVersions = data.body;
+                        savedData.defaultFirmwareVersion = 0;
+        
+                        for(const fv of savedData.firmwareVersions) {
+                            if (fv.product_default) {
+                                savedData.defaultFirmwareVersion = fv.version;
+                            }
+                        }
 
-                    saveSavedData();
+                        saveSavedData();
 
-                    resolve();
-                },
-                function (err) {
-                    logger.error('failed to retrieve product info (typically bad access token or product id)', err);
-                    process.exit(1);
-                }
-            );
-        });
-    
+                        resolve();
+                    },
+                    function (err) {
+                        logger.error('failed to retrieve product info (typically bad access token or product id)', err);
+                        process.exit(1);
+                    }
+                );
+            });
+        }
+
         let userBinaryFileInfo;
 
+
+        if (!config.noParticleLogin && config.productId) {
+
+            // Get the firmware binary for your product, either manually configured version or the product default
+            // If the config hash changes the contents of the staging directory are deleted, so firmware.bin won't exist
+            const firmwareBinaryPath = path.join(stagingDir, 'firmware.bin');
+            if (!fs.existsSync(firmwareBinaryPath) || !savedData.moduleInfo || !savedData.moduleInfo['firmware']) {
+                let firmwareVersion = config.firmwareVersion;
+                if (!firmwareVersion) {
+                    firmwareVersion = savedData.defaultFirmwareVersion;
+                }
+                if (!firmwareVersion) {
+                    logger.error('config.firmwareVersion not set and no product default firmware.');
+                    process.exit(1);        
+                }
+
+                await new Promise((resolve, reject) => {
+                    particle.downloadProductFirmware({ auth: helper.auth, product: config.productId, version: firmwareVersion }).then(
+                        function (data) {
+                            logger.info('using firmware version ' + firmwareVersion);
+                
+                            fs.writeFileSync(firmwareBinaryPath, data);
         
-        // Get the firmware binary for your product, either manually configured version or the product default
-        // If the config hash changes the contents of the staging directory are deleted, so firmware.bin won't exist
-        const firmwareBinaryPath = path.join(stagingDir, 'firmware.bin');
-        if (!fs.existsSync(firmwareBinaryPath) || !savedData.moduleInfo || !savedData.moduleInfo['firmware']) {
-            let firmwareVersion = config.firmwareVersion;
-            if (!firmwareVersion) {
-                firmwareVersion = savedData.defaultFirmwareVersion;
-            }
-            if (!firmwareVersion) {
-                logger.error('config.firmwareVersion not set and no product default firmware.');
+                            // Read the module header so we can find the Device OS dependency information
+                            binaryVersionReader.parseFile(firmwareBinaryPath, function (fileInfo, err) {
+                                // console.log('fileInfo', fileInfo);
+                                if (err) {
+                                    reject(err);
+                                    return;
+                                }
+        
+                                userBinaryFileInfo = fileInfo;
+                                // console.log('user firmware binary info', userBinaryFileInfo);
+        
+                                // Don't include the binary copy of the file in savedData
+                                delete userBinaryFileInfo.fileBuffer;
+        
+                                // Is it in the semver table?
+                                if (config.forceSystemVersion) {
+                                    savedData.systemVersion = semVerToSystemVersion(config.forceSystemVersion);
+                                    if (!savedData.systemVersion) {
+                                        logger.info('forceSystemVersion does not specify a known restore image version');
+                                        reject('invalid forceSystemVersion');    
+                                    }
+                                    console.log('using forceSystemVersion=' + config.forceSystemVersion);
+                                }
+                                else {
+                                    savedData.systemVersion = fileInfo.prefixInfo.depModuleVersion;
+                                }
+        
+                                savedData.systemVersionSemVer = systemVersionToSemVer(savedData.systemVersion);
+        
+
+
+                                // Is it in the restore images?
+        
+                                savedData.restoreSemVer = findRestoreSemVer(platformId, savedData.systemVersion);
+                                // console.log('restoreSemVer=' + savedData.restoreSemVer);
+                                if (!savedData.restoreSemVer) {
+                                    logger.info('Selected user binary file targets a Device OS version not supported by Device Restore');
+                                    reject('no device restore image');
+                                }
+        
+                                if (savedData.systemVersionSemVer != savedData.restoreSemVer) {
+                                    logger.info('not an exact system match using ' + savedData.restoreSemVer + ' instead of ' + savedData.systemVersionSemVer);
+                                }
+        
+                                for(let tempPlatformObj of savedData.deviceRestoreInfo.platforms) {
+                                    if (tempPlatformObj.id == platformId) {
+                                        savedData.platformInfo = tempPlatformObj;
+                                        savedData.platformName = tempPlatformObj.name;
+                                    }
+                                }
+
+                                if (savedData.systemVersion >= 3000 && savedData.platformInfo.id == 26) {
+                                    // Is tracker
+                                    savedData.shouldUpgradeTrackerNCP = true;
+                                }
+                                else {
+                                    savedData.shouldUpgradeTrackerNCP = false;
+                                }
+
+
+                                // console.log('restoreSemVer=' + savedData.restoreSemVer + ' platformName=' + savedData.platformName)
+        
+                                saveSavedData();
+        
+                                resolve();
+                            });                    
+                        },
+                        function(err) {
+                            logger.error('failed to download firmware version ' + firmwareVersion, err);
+                            process.exit(1);        
+                        }
+                    ); 
+                });
+            }  
+        }
+        else {
+            if (!config.forceSystemVersion) {
+                logger.error('forceSystemVersion is required if not logging in or no product specified');
                 process.exit(1);        
             }
+            if (!config.forcePlatformId) {
+                logger.error('forcePlatformId is required if no product specified');
+                process.exit(1);        
+            }
+            platformId = config.forcePlatformId;
 
-            await new Promise((resolve, reject) => {
-                particle.downloadProductFirmware({ auth: helper.auth, product: config.productId, version: firmwareVersion }).then(
-                    function (data) {
-                        logger.info('using firmware version ' + firmwareVersion);
-            
-                        fs.writeFileSync(firmwareBinaryPath, data);
-    
-                        // Read the module header so we can find the Device OS dependency information
-                        binaryVersionReader.parseFile(firmwareBinaryPath, function (fileInfo, err) {
-                            // console.log('fileInfo', fileInfo);
-                            if (err) {
-                                reject(err);
-                                return;
-                            }
-    
-                            userBinaryFileInfo = fileInfo;
-                            // console.log('user firmware binary info', userBinaryFileInfo);
-    
-                            // Don't include the binary copy of the file in savedData
-                            delete userBinaryFileInfo.fileBuffer;
-    
-                            // Is it in the semver table?
-                            if (config.forceSystemVersion) {
-                                savedData.systemVersion = semVerToSystemVersion(config.forceSystemVersion);
-                                if (!savedData.systemVersion) {
-                                    logger.info('forceSystemVersion does not specify a known restore image version');
-                                    reject('invalid forceSystemVersion');    
-                                }
-                                console.log('using forceSystemVersion=' + config.forceSystemVersion);
-                            }
-                            else {
-                                savedData.systemVersion = fileInfo.prefixInfo.depModuleVersion;
-                            }
-    
-                            savedData.systemVersionSemVer = systemVersionToSemVer(savedData.systemVersion);
-    
+            savedData.systemVersion = semVerToSystemVersion(config.forceSystemVersion);
+            if (!savedData.systemVersion) { 
+                logger.info('forceSystemVersion does not specify a known restore image version');
+                reject('invalid forceSystemVersion');    
+            }
+            console.log('using forceSystemVersion=' + config.forceSystemVersion);
+
+            savedData.systemVersionSemVer = systemVersionToSemVer(savedData.systemVersion);
+        
+            savedData.restoreSemVer = findRestoreSemVer(platformId, savedData.systemVersion);
+
+            if (!savedData.restoreSemVer) {
+                logger.info('Selected user binary file targets a Device OS version not supported by Device Restore');
+                reject('no device restore image');
+            }
 
 
-                            // Is it in the restore images?
-    
-                            savedData.restoreSemVer = findRestoreSemVer(fileInfo.prefixInfo.platformID, savedData.systemVersion);
-                            // console.log('restoreSemVer=' + savedData.restoreSemVer);
-                            if (!savedData.restoreSemVer) {
-                                logger.info('Selected user binary file targets a Device OS version not supported by Device Restore');
-                                reject('no device restore image');
-                            }
-    
-                            if (savedData.systemVersionSemVer != savedData.restoreSemVer) {
-                                logger.info('not an exact system match using ' + savedData.restoreSemVer + ' instead of ' + savedData.systemVersionSemVer);
-                            }
-    
-                            for(let tempPlatformObj of savedData.deviceRestoreInfo.platforms) {
-                                if (tempPlatformObj.id == fileInfo.prefixInfo.platformID) {
-                                    savedData.platformInfo = tempPlatformObj;
-                                    savedData.platformName = tempPlatformObj.name;
-                                }
-                            }
+            if (savedData.systemVersionSemVer != savedData.restoreSemVer) {
+                logger.info('not an exact system match using ' + savedData.restoreSemVer + ' instead of ' + savedData.systemVersionSemVer);
+            }
 
-                            if (savedData.systemVersion >= 3000 && savedData.platformInfo.id == 26) {
-                                // Is tracker
-                                savedData.shouldUpgradeTrackerNCP = true;
-                            }
-                            else {
-                                savedData.shouldUpgradeTrackerNCP = false;
-                            }
+            for(let tempPlatformObj of savedData.deviceRestoreInfo.platforms) {
+                if (tempPlatformObj.id == platformId) {
+                    savedData.platformInfo = tempPlatformObj;
+                    savedData.platformName = tempPlatformObj.name;
+                }
+            }
 
+            if (savedData.systemVersion >= 3000 && savedData.platformInfo.id == 26) {
+                // Is tracker
+                savedData.shouldUpgradeTrackerNCP = true;
+            }
+            else {
+                savedData.shouldUpgradeTrackerNCP = false;
+            }
 
-                            // console.log('restoreSemVer=' + savedData.restoreSemVer + ' platformName=' + savedData.platformName)
-    
-                            saveSavedData();
-    
-                            resolve();
-                        });                    
-                    },
-                    function(err) {
-                        logger.error('failed to download firmware version ' + firmwareVersion, err);
-                        process.exit(1);        
-                    }
-                ); 
-            });
+            // console.log('restoreSemVer=' + savedData.restoreSemVer + ' platformName=' + savedData.platformName)
+
+            saveSavedData();
         }
     
         if (!savedData.moduleInfo) {
@@ -566,19 +650,29 @@ async function run() {
                 const buf = Buffer.alloc(1, 0x01);
                 fs.writeFileSync(p, buf);
             }
+            if (config.setupNotDone) {
+                const p = path.join(stagingDir, 'ff.bin');
+                const buf = Buffer.alloc(1, 0xff);
+                fs.writeFileSync(p, buf);
+            }
 
             const updateDfuParts = function(dfuParts) {
                 // Handle modules where prefix must be dropped (such as soft device)
                 for(let ii = dfuParts.length - 1; ii >= 0; ii--) {
                     partName = dfuParts[ii].name;
+
+                    if (config.flashTinker && partName == 'firmware') {
+                        partName = 'tinker';
+                    }
+
                     if (savedData.moduleInfo[partName]) {
                         const prefixInfo = savedData.moduleInfo[partName].prefixInfo;
                     
-                        let binaryPath = path.join(stagingDir, dfuParts[ii].name + '.bin');
+                        let binaryPath = path.join(stagingDir, partName + '.bin');
                         if ((prefixInfo.moduleFlags & 0x01) != 0) { // ModuleInfo.Flags.DROP_MODULE_INFO
                             // Drop module info is used for the Gen 3 softdevice
                 
-                            const tempPath = path.join(stagingDir, dfuParts[ii].name + '.noprefix.bin');
+                            const tempPath = path.join(stagingDir, partName + '.noprefix.bin');
                 
                             const binary = fs.readFileSync(binaryPath);
                 
@@ -615,7 +709,9 @@ async function run() {
                     else 
                     if (partName == 'setup-done') {
                         if (savedData.platformInfo.gen == 3) {
-                            dfuParts[ii].binaryPath = path.join(stagingDir, '01.bin');
+                            const filename = ((config.setupNotDone) ? 'ff' : '00') + '.bin';
+
+                            dfuParts[ii].binaryPath = path.join(stagingDir, filename);
                         }
                         else {
                             dfuParts.splice(ii, 1);
@@ -743,7 +839,6 @@ function findRestoreSemVer(platformId, sysVer) {
 };
 
 let deviceList = [];
-let productInfo;
 
 const fetchPage = function (page) {
     particle.listDevices({ auth: helper.auth, product: config.productId, page }).then(
@@ -1006,7 +1101,7 @@ async function flashFirmware(device, dfuParts) {
 async function deviceCheck(device) {
     const deviceId = device.id;
 
-    if (device.platformId != productInfo.platform_id) {
+    if (device.platformId != platformId) {
         logger.info('wrong type of device, ignoring ' + deviceId);
         return;
     }
@@ -1017,29 +1112,37 @@ async function deviceCheck(device) {
     try {
         let res;
 
-        // Add to product. Do this always because it's fast and also takes care of the situation
-        // where the device is already in quarantine.
-        res = await particle.addDeviceToProduct({ auth: helper.auth, product: config.productId, deviceId: deviceId });
-        if (res.statusCode != 200) {
-            deviceLogBrowser(deviceId, 'failed to add to product');
-            throw 'failed to add to product';
+        let deviceInfo = {};
+
+        if (!config.noParticleLogin && config.productId) {
+            // Add to product. Do this always because it's fast and also takes care of the situation
+            // where the device is already in quarantine.
+            res = await particle.addDeviceToProduct({ auth: helper.auth, product: config.productId, deviceId: deviceId });
+            if (res.statusCode != 200) {
+                deviceLogBrowser(deviceId, 'failed to add to product');
+                throw 'failed to add to product';
+            }
+
+            deviceLogBrowser(deviceId, 'added to product');
+
+            // Get additional information (name, serial number, etc)
+            res = await particle.getDevice({ auth: helper.auth, product: config.productId, deviceId: deviceId });
+            if (res.statusCode != 200) {
+                deviceLogBrowser(deviceId, 'failed get device info');
+                throw 'failed to get device info';
+            }
+            deviceInfo = res.body;
+        }
+        else {
+            deviceInfo.id = deviceId;
+            deviceInfo.platform_id = platformId;
         }
 
-        deviceLogBrowser(deviceId, 'added to product');
-
-        // Get additional information (name, serial number, etc)
-        res = await particle.getDevice({ auth: helper.auth, product: config.productId, deviceId: deviceId });
-        if (res.statusCode != 200) {
-            deviceLogBrowser(deviceId, 'failed get device info');
-            throw 'failed to get device info';
-        }
-    
-        let deviceInfo = res.body;
         setDeviceInfoBrowser(deviceId, deviceInfo);
 
         // Activate SIM for Electron?
     
-            
+        
         if (config.claimDevice) {
             deviceLogBrowser(deviceId, 'claiming device');
             await particle.claimDevice({ 
@@ -1052,73 +1155,76 @@ async function deviceCheck(device) {
             });        
         }
 
-        let newDeviceInfo = {};
+        if (!config.noParticleLogin) {
+            let newDeviceInfo = {};
 
-        if (config.markAsDevelopment) {
-            newDeviceInfo.development = true;
-        }
-        if (config.deviceNameIsSerialNumber) {
-            newDeviceInfo.name = deviceInfo.serial_number;
-            deviceNames[deviceId] = newDeviceInfo.name;
-        }
-        if (config.lockFirmwareVersion) {
-            newDeviceInfo.desiredFirmwareVersion = config.lockFirmwareVersion;
-
-            if (config.flashNow) {
-                newDeviceInfo.flash = config.flashNow;
+            if (config.markAsDevelopment) {
+                newDeviceInfo.development = true;
             }
-        }
-
-        if (Object.keys(newDeviceInfo).length > 0) {
-            deviceLogBrowser(deviceId, 'setting device info');
-            await particle.updateDevice(Object.assign(newDeviceInfo, { 
+            if (config.deviceNameIsSerialNumber) {
+                newDeviceInfo.name = deviceInfo.serial_number;
+                deviceNames[deviceId] = newDeviceInfo.name;
+            }
+            if (config.lockFirmwareVersion) {
+                newDeviceInfo.desiredFirmwareVersion = config.lockFirmwareVersion;
+    
+                if (config.flashNow) {
+                    newDeviceInfo.flash = config.flashNow;
+                }
+            }
+    
+            if (Object.keys(newDeviceInfo).length > 0) {
+                deviceLogBrowser(deviceId, 'setting device info');
+                await particle.updateDevice(Object.assign(newDeviceInfo, { 
+                    product: productInfo.id,
+                    deviceId, 
+                    auth: helper.auth 
+                }));
+            }
+    
+            // Device group?
+            if (config.deviceGroupName || config.deviceGroupFormat) {
+                let groupName;
+                if (config.deviceGroupName) {
+                    groupName = config.deviceGroupName;
+                }
+                else {
+                    switch(config.deviceGroupFormat) {
+                        case 'date':
+                            groupName = helper.formatDateYYYYMMDD();
+                            break;
+    
+                        case 'dateQuantity':
+                            groupName = helper.formatDateYYYYMMDD() + '_' + importSize;
+                            break;
+                    }
+                }
+    
+                if (groupName) {
+                    deviceLogBrowser(deviceId, 'assigning device group');
+                    await helper.assignDeviceGroups({ 
+                        product: productInfo.id,
+                        deviceId,
+                        groups: [groupName],
+                        auth: helper.auth
+                    });    
+                    deviceLogJson(deviceId, {
+                        deviceGroup: groupName
+                    });        
+                }
+            }        
+    
+            deviceInfo = (await particle.getDevice({ 
                 product: productInfo.id,
                 deviceId, 
                 auth: helper.auth 
-            }));
+            })).body;
+            
+            deviceLogJson(deviceId, {deviceInfo});
+    
+            setDeviceInfoBrowser(deviceId, deviceInfo);
         }
 
-        // Device group?
-        if (config.deviceGroupName || config.deviceGroupFormat) {
-            let groupName;
-            if (config.deviceGroupName) {
-                groupName = config.deviceGroupName;
-            }
-            else {
-                switch(config.deviceGroupFormat) {
-                    case 'date':
-                        groupName = helper.formatDateYYYYMMDD();
-                        break;
-
-                    case 'dateQuantity':
-                        groupName = helper.formatDateYYYYMMDD() + '_' + importSize;
-                        break;
-                }
-            }
-
-            if (groupName) {
-                deviceLogBrowser(deviceId, 'assigning device group');
-                await helper.assignDeviceGroups({ 
-                    product: productInfo.id,
-                    deviceId,
-                    groups: [groupName],
-                    auth: helper.auth
-                });    
-                deviceLogJson(deviceId, {
-                    deviceGroup: groupName
-                });        
-            }
-        }        
-
-        deviceInfo = (await particle.getDevice({ 
-            product: productInfo.id,
-            deviceId, 
-            auth: helper.auth 
-        })).body;
-        
-        deviceLogJson(deviceId, {deviceInfo});
-
-        setDeviceInfoBrowser(deviceId, deviceInfo);
 
         if (config.flashFirmware) {
             // Flash firmware

@@ -1,5 +1,6 @@
 let source;
 let lastUpdate;
+let noCloud = false;
 
 $(document).ready(function() {
 
@@ -48,7 +49,7 @@ function connectSSE() {
         
         const obj2 = JSON.parse(obj[0]);
 
-        //console.log('obj2', obj2);
+        // console.log('obj2', obj2);
         switch(obj2.op) {
             case 'log':
                 serverLog(obj2.msg);
@@ -72,7 +73,14 @@ function connectSSE() {
 
             case 'setupDone':
                 $(deviceFind(obj2.id, false).elem).addClass('deviceSetupDone');
-                $(deviceFind(obj2.id, false).elem).find('.signalDiv').show();
+                if (!noCloud) {
+                    $(deviceFind(obj2.id, false).elem).find('.signalDiv').show();
+                }
+                break;
+
+            case 'noCloud':
+                noCloud = true;
+                console.log('no cloud mode');
                 break;
 
             default:

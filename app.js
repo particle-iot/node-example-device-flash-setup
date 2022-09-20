@@ -244,7 +244,7 @@ if (config.noParticleLogin) {
 }
 
 // This creates the Express.js server used to handle the web-based status interface
-var SSE = require('express-sse');
+var SSE = require('express-sse').SSE;
 var sse = new SSE(sseInitOptions);
 
 

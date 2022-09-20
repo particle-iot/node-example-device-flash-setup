@@ -10,15 +10,16 @@
     "contributors": [],
     "license": "MIT",
     "dependencies": {
+        "@particle/device-constants": "^2.1.0",
         "@particle/node-example-helper": "0.0.1",
         "adm-zip": "^0.5.6",
         "axios": "^0.21.4",
         "binary-version-reader": "git+https://github.com/particle-iot/binary-version-reader.git",
-        "express": "^4.17.1",
-        "express-sse": "^0.5.3",
-        "particle-api-js": "^9.1.0",
+        "express": "^4.18.1",
+        "express-sse": "github:omgimalexis/express-sse",
+        "particle-api-js": "^9.4.1",
         "particle-usb": "^1.2.2",
-        "winston": "^3.3.3",
+        "winston": "^3.8.2",
         "yargs": "^17.5.1"
     },
     "engines": {
